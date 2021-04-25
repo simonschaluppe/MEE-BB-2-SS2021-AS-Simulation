@@ -281,6 +281,7 @@ class Model:
         ax.plot(self.QI[start:end])
         ax.plot(self.QH[start:end])
         ax.plot(self.QC[start:end])
+        ax.set_title("Wärmebilanz")
         ax.set_ylabel("W/m²")
         ax.legend(["Transmissionsverluste", "Lüftungsverluste", "Solare Gewinne",
                    "Innere Lasten", "Heizwärmebdedarf", "Kühlbedarf"])
@@ -289,6 +290,7 @@ class Model:
         # FigureCanvas(fig) # not needed in mpl >= 3.1
         ax.plot(self.TI[start:end])
         ax.plot(self.TA[start:end])
+        ax.set_title("Temperatur")
         ax.set_ylabel("Temperatur [°C]")
         ax.legend(["Innenraum", "Außenluft"])
 
@@ -297,6 +299,7 @@ class Model:
         ax.plot(self.PV.TSD[start:end])
         ax.plot(self.ED_QH[start:end])
         ax.plot(self.ED_QC[start:end])
+        ax.set_title("Strom")
         ax.set_ylabel("W/m²")
         ax.legend(["PV", "WP Heizen", "WP Kühlen"])
 
