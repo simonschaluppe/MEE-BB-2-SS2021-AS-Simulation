@@ -78,7 +78,6 @@ class Building:
         hull_df.drop(hull_df.index[0], inplace=True)
         return hull_df
 
-
     def L_T(self, hull_df):  # expects a pandas dataframe as input
         A_B = hull_df["Fläche"].sum()
         hull_df["L_B"] = hull_df["Fläche"] * hull_df["U-Wert"] * hull_df["Temperatur-Korrekturfaktor"]
@@ -109,8 +108,8 @@ class Config:
 class Model:
     def __init__(self):
 
-        self.PV = PV()
-        self.Building = Building()
+        self.PV = PV(kWp=30)
+        self.building = Building()
         # self.battery = parameters["Battery"]
         self.config = Config()
 
@@ -122,6 +121,7 @@ class Model:
         self.ACH_V = Usage["Luftwechsel_Anlage_1_h"].to_numpy()
         self.ACH_I = Usage["Luftwechsel_Infiltration_1_h"].to_numpy()
         self.Qdhw = Usage["Warmwasserbedarf_W_m2"].to_numpy()
+        self.ED_user = Usage["Nutzerstrom_W_m2"]
 
         # load climate data
         self.TA = np.genfromtxt("data/climate.csv",
@@ -130,7 +130,7 @@ class Model:
         self.QS = np.genfromtxt("data/Solar_gains.csv") # W/m²
 
         # initialize result arrays
-        self.timestamp = pd.Series(np.arange('2021-01-01 00:00', '2022-01-01 00:00', dtype='datetime64[h]'))
+        self.timestamp = pd.Series(np.arange('1970-01-01 00:00', '1971-01-01 00:00', dtype='datetime64[h]'))
 
         self.QV = np.zeros(8760) * np.nan # ventilation losses
         # it's usually better to initialize our results with Not A Number,
@@ -151,6 +151,11 @@ class Model:
 
         self.ED = np.zeros(8760) * np.nan # Electricity demand Wh/m²
 
+        self.PV_use = np.zeros(8760)
+        self.PV_feedin = np.zeros(8760)
+
+        self.ED_grid = np.zeros(8760)
+
     def init_sim(self):
         self.QV[0] = 0
         self.QT[0] = 0
@@ -162,34 +167,36 @@ class Model:
         self.ED_QC[0] = 0
         self.ED[0] = 0
 
-
     def calc_QV(self, t):
         """Ventilation heat losses [W/m²NGF] at timestep t"""
         dT = self.TA[t - 1] - self.TI[t - 1]
-        room_height = self.Building.net_storey_height
+        room_height = self.building.net_storey_height
         cp_air = self.config.cp_air
         # thermally effective air change
         eff_airchange = self.ACH_I[t] + self.ACH_V[t]  # * M.VentilationSystem.share_cs * rel_ACH_after_heat_recovery
 
         self.QV[t] = eff_airchange * room_height * cp_air * dT
 
-
     def calc_QT(self, t):
         """Transmission heat losses [W/m²NGF] at timestep t"""
         dT = self.TA[t - 1] - self.TI[t - 1]
-        self.QT[t] = self.Building.LT * dT
+        self.QT[t] = self.building.LT * dT
 
-
+    def is_heating_on(self, t, TI_new):
+        if self.config.heating_system == True:
+            if self.timestamp[t].month in self.config.heating_months:
+                if TI_new < self.config.minimum_room_temperature:
+                    return True
+        return False
 
     def calc_QH(self, t):
         """Heating demand"""
         self.QH[t] = 0
         self.Q_loss[t] = (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
-        TI_new = self.TI[t - 1] + self.Q_loss[t] / self.Building.heat_capacity
+        TI_new = self.TI[t - 1] + self.Q_loss[t] / self.building.heat_capacity
 
         if self.is_heating_on(t, TI_new):
-            self.QH[t] = (self.config.minimum_room_temperature - TI_new) * self.Building.heat_capacity
-
+            self.QH[t] = (self.config.minimum_room_temperature - TI_new) * self.building.heat_capacity
 
     def calc_ED_QH(self, t):
         """Calculates the necessary electricity demand"""
@@ -199,15 +206,23 @@ class Model:
         self.ED_QH[t] = min(required_for_heating, available_power)
         # calc_DHW(M, TSD, t)
 
+    def is_cooling_on(self, t, TI_new):
+        """
+        Determines, whether all conditions are met to use cooling
+        """
+        c1 = self.config.cooling_system == True
+        c2 = self.timestamp[t].month in self.config.cooling_months
+        c3 = TI_new > self.config.maximum_room_temperature
+        return all([c1, c2,
+                    c3])  # returns True if all conditions are true, False otherwise. similarly, any(). You can stack this way more cleanly
 
     def calc_QC(self, t):
         self.QC[t] = 0
         self.Q_loss[t] = (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
-        TI_new = self.TI[t - 1] + self.Q_loss[t] / self.Building.heat_capacity
+        TI_new = self.TI[t - 1] + self.Q_loss[t] / self.building.heat_capacity
 
         if self.is_cooling_on(t, TI_new):
-            self.QC[t] = (self.config.maximum_room_temperature - TI_new) * self.Building.heat_capacity
-
+            self.QC[t] = (self.config.maximum_room_temperature - TI_new) * self.building.heat_capacity
 
     def calc_ED_QC(self, t):
         """Calculates the necessary electricity demand for cooling"""
@@ -217,28 +232,23 @@ class Model:
         self.ED_QC[t] = min(required_for_cooling, available_power)
         # calc_DHW(M, TSD, t)
 
+    def calc_ED(self, t):
+        self.ED[t] = self.ED_QH[t] + self.ED_QC[t] + self.ED_user[t]
+
+
+    def calc_PV_use(self, t):
+        """allocates the PV to use"""
+        self.PV_use[t] = min(self.PV.TSD[t], self.ED[t])
+        self.PV_feedin[t] = max(self.PV.TSD[t] - self.ED[t], 0)
+
     def calc_TI(self, t):
         QH_effective = self.ED_QH[t] * self.config.HP_COP * self.config.heating_eff
         QC_effective = -self.ED_QC[t] * self.config.HP_COP * self.config.heating_eff
 
         Q_balance = QH_effective + QC_effective + (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
-        self.TI[t] = self.TI[t - 1] + Q_balance / self.Building.heat_capacity
+        self.TI[t] = self.TI[t - 1] + Q_balance / self.building.heat_capacity
 
-    def is_heating_on(self, t, TI_new):
-        if self.config.heating_system == True:
-            if self.timestamp[t].month in self.config.heating_months:
-                if TI_new < self.config.minimum_room_temperature:
-                    return True
-        return False
 
-    def is_cooling_on(self, t, TI_new):
-        """
-        Determines, whether all conditions are met to use cooling
-        """
-        c1 = self.config.cooling_system == True
-        c2 = self.timestamp[t].month in self.config.cooling_months
-        c3 = TI_new > self.config.maximum_room_temperature
-        return all([c1, c2, c3])  # returns True if all conditions are true, False otherwise. similarly, any(). You can stack this way more cleanly
 
     def simulate(self):
 
@@ -257,13 +267,23 @@ class Model:
             #### Raumtemperatur
             self.calc_TI(t)
 
+            #calc total energy demand
+            self.calc_ED(t)
+            #allocate pv
+            self.calc_PV_use(t)
+            # use directly
+            # power battery
+            # feed_in
+
+
         return True
 
-    def plot(self, show=True):
-        fig, ax = plt.subplots(3,1,) #tight_layout=True)
-        self.plot_Q(fig, ax[0])
-        self.plot_T(fig, ax[1])
-        self.plot_Electricity(fig, ax[2])
+    def plot(self, show=True, start=1, end=400):
+        fig, ax = plt.subplots(4,1,figsize=(8,12)) #tight_layout=True)
+        self.plot_Q(fig, ax[0], start=start, end=end)
+        self.plot_T(fig, ax[1], start=start, end=end)
+        self.plot_ED(fig, ax[2], start=start, end=end)
+        self.plot_ES(fig, ax[3], start=start, end=end)
 
         if show:
             dummy = plt.figure() # create a dummy figure
@@ -272,7 +292,7 @@ class Model:
             fig.set_canvas(new_manager.canvas)
             fig.show()
 
-    def plot_Q(self, fig, ax, start=0, end=8760):
+    def plot_Q(self, fig, ax, start=1, end=8760):
         # FigureCanvas(fig) # not needed in mpl >= 3.1
 
         ax.plot(self.QT[start:end])
@@ -294,19 +314,31 @@ class Model:
         ax.set_ylabel("Temperatur [°C]")
         ax.legend(["Innenraum", "Außenluft"])
 
-    def plot_Electricity(self, fig, ax, start=1, end=8760):
+    def plot_ED(self, fig, ax, start=1, end=8760):
         # FigureCanvas(fig) # not needed in mpl >= 3.1
         ax.plot(self.PV.TSD[start:end])
         ax.plot(self.ED_QH[start:end])
         ax.plot(self.ED_QC[start:end])
+        ax.plot(self.ED_user[start:end])
         ax.set_title("Strom")
         ax.set_ylabel("W/m²")
-        ax.legend(["PV", "WP Heizen", "WP Kühlen"])
+        ax.legend(["PV", "WP Heizen", "WP Kühlen", "Nutzerstrom"])
 
+    def plot_ES(self, fig, ax, start=1, end=8760):
+        """plots the electricity supply and use"""
+        ax.plot(self.PV.TSD[start:end])
+        ax.stackplot(range(start,end),
+                     self.PV_use[start:end],
+                     self.ED[start:end] - self.PV_use[start:end],
+                     self.PV_feedin[start:end],
+                     labels=['PV Eigenverbrauch','Netzstrom','Einspeisung'])
+        ax.set_title("PV Nutzung")
+        ax.set_ylabel("W/m²")
+        ax.legend(["PV", 'PV Eigenverbrauch','Netzstrom','Einspeisung'])
 
 if __name__ == "__main__":
     m = Model()
     t = m.PV
-    b = m.Building
+    b = m.building
     m.simulate()
     m.plot()
