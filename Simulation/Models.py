@@ -15,7 +15,7 @@ class PV:
     """
     PV Profile with .TSD in [kWh]
     """
-    def __init__(self, csv="data/pv_1kWp.csv", kWp=1):
+    def __init__(self, csv="data/pv_1kWp.csv", kWp=1, cost_kWp=1000):
         default_path = "data/pv_1kWp.csv"
 
         if csv == default_path:
@@ -25,6 +25,7 @@ class PV:
             self.TSD = np.genfromtxt(csv) # no specifiers, better make sure that this is right
 
         self.set_kWp(kWp)
+        self.cost = kWp * cost_kWp
         self.kWh = self.TSD.sum()
 
     def set_kWp(self, kWp):
@@ -42,6 +43,7 @@ class Building:
         self.gf             = self.params_df.loc["plot_size", "Value"] # m²
         self.heat_capacity  = self.params_df.loc["effective_heat_capacity", "Value"] # Wh/m²K
         self.net_storey_height = self.params_df.loc["net_storey_height", "Value"]
+        self.differential_cost = self.params_df.loc["differential_cost", "Value"]
 
         self.hull_df = self.load_hull(path)
         # if insert windows?
@@ -104,11 +106,14 @@ class Config:
 
     cp_air = 0.34 # spez. Wärme kapazität Luft (Wh/m3K)
 
+    price_grid = 0.19
+    price_feedin = 0.05
+
 
 class Model:
-    def __init__(self):
+    def __init__(self, kWp=1):
 
-        self.PV = PV(kWp=30)
+        self.PV = PV(kWp=kWp)
         self.building = Building()
         # self.battery = parameters["Battery"]
         self.config = Config()
@@ -235,7 +240,6 @@ class Model:
     def calc_ED(self, t):
         self.ED[t] = self.ED_QH[t] + self.ED_QC[t] + self.ED_user[t]
 
-
     def calc_PV_use(self, t):
         """allocates the PV to use"""
         self.PV_use[t] = min(self.PV.TSD[t], self.ED[t])
@@ -248,7 +252,21 @@ class Model:
         Q_balance = QH_effective + QC_effective + (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
         self.TI[t] = self.TI[t - 1] + Q_balance / self.building.heat_capacity
 
+    def calc_cost(self, years=20):
+        """calculates the total cost of the system"""
+        # calc investment
+        self.investment_cost = self.building.differential_cost * self.building.bgf + self.PV.cost
+        self.operational_cost = self.building.bgf * (
+                                - self.PV_feedin.sum()/1000 * self.config.price_feedin \
+                                + self.ED_grid.sum()/1000 * self.config.price_grid)
 
+        print(f"Investment cost:  {round(self.investment_cost):>20.2f} €")
+        print(f"Operational cost: {round(self.operational_cost):>20.2f} €/annum")
+
+        self.total_cost = self.investment_cost + self.operational_cost * years
+        print(f"Total cost after {years} years: {round(self.total_cost):>11,.2f} €")
+
+        return self.total_cost
 
     def simulate(self):
 
@@ -274,8 +292,9 @@ class Model:
             # use directly
             # power battery
             # feed_in
+            self.ED_grid[t] = self.ED[t] - self.PV_use[t]
 
-
+        self.calc_cost()
         return True
 
     def plot(self, show=True, start=1, end=400):
@@ -329,7 +348,7 @@ class Model:
         ax.plot(self.PV.TSD[start:end])
         ax.stackplot(range(start,end),
                      self.PV_use[start:end],
-                     self.ED[start:end] - self.PV_use[start:end],
+                     self.ED_grid[start:end],
                      self.PV_feedin[start:end],
                      labels=['PV Eigenverbrauch','Netzstrom','Einspeisung'])
         ax.set_title("PV Nutzung")
@@ -337,7 +356,7 @@ class Model:
         ax.legend(["PV", 'PV Eigenverbrauch','Netzstrom','Einspeisung'])
 
 if __name__ == "__main__":
-    m = Model()
+    m = Model(kWp=15)
     t = m.PV
     b = m.building
     m.simulate()
