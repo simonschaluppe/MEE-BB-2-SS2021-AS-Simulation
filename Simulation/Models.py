@@ -24,13 +24,13 @@ class PV:
         else:
             self.TSD = np.genfromtxt(csv) # no specifiers, better make sure that this is right
 
-        self.set_kWp(kWp)
-        self.cost = kWp * cost_kWp
+        self.set_kWp(kWp, cost_kWp)
         self.kWh = self.TSD.sum()
 
-    def set_kWp(self, kWp):
+    def set_kWp(self, kWp, cost_kWp):
         self.TSD = self.TSD * kWp
         self.kWp = kWp
+        self.cost = kWp * cost_kWp
 
 class Building:
     """
@@ -88,6 +88,32 @@ class Building:
         L_T = L_B + L_PX
         return L_T
 
+class Battery:
+    """a Simplistic Battery"""
+    def __init__(self, kWh):
+        self.capacity = kWh # kWh
+        self.charge_power_max = 10 # kW
+        self.discharge_power_max = 10 # kW
+        self.charge_efficiency = 0.9
+        self.discharge_efficiency = 0.9
+        self.discharge_per_hour = 0.00012
+        self.cost_kWh = 1000
+        self.cost = self.capacity * self.cost_kWh
+        self.current_charge = 0. #kWh
+
+    def charge(self, kW):
+        max_charge = (self.capacity - self.current_charge) / self.charge_efficiency
+        accepted_energy = min(kW, self.charge_power_max, max_charge)
+        self.current_charge += accepted_energy * self.charge_efficiency
+        return accepted_energy
+
+    def discharge(self, kW:float):
+        max_discharge = min(self.discharge_power_max, self.current_charge)
+        desired_discharge = kW / self.discharge_efficiency
+        discharged_energy = min(desired_discharge, max_discharge)
+        self.current_charge -= discharged_energy
+        return discharged_energy * self.discharge_efficiency
+
 class Config:
     """stuff that won't change for most simulations"""
     heating_system = True
@@ -111,12 +137,20 @@ class Config:
 
 
 class Model:
-    def __init__(self, kWp=1):
+    def __init__(self, kWp=1, battery_kWh=15):
+
+        self.building = Building()
+        self.config = Config()
 
         self.PV = PV(kWp=kWp)
-        self.building = Building()
-        # self.battery = parameters["Battery"]
-        self.config = Config()
+        self.PV_prod = self.PV.TSD *1000 / self.building.bgf  # everything is in Wh/m²
+        self.PV_use = np.zeros(8760)
+        self.PV_feedin = np.zeros(8760)
+        self.PV_to_battery = np.zeros(8760)
+
+
+        self.battery = Battery(kWh=battery_kWh)
+        self.Btt_to_ED = np.zeros(8760)
 
         # load usage characteristics
         Usage = pd.read_csv("data/usage_profiles.csv", encoding="cp1252")
@@ -126,7 +160,7 @@ class Model:
         self.ACH_V = Usage["Luftwechsel_Anlage_1_h"].to_numpy()
         self.ACH_I = Usage["Luftwechsel_Infiltration_1_h"].to_numpy()
         self.Qdhw = Usage["Warmwasserbedarf_W_m2"].to_numpy()
-        self.ED_user = Usage["Nutzerstrom_W_m2"]
+        self.ED_user = Usage["Nutzerstrom_W_m2"].to_numpy()
 
         # load climate data
         self.TA = np.genfromtxt("data/climate.csv",
@@ -156,8 +190,7 @@ class Model:
 
         self.ED = np.zeros(8760) * np.nan # Electricity demand Wh/m²
 
-        self.PV_use = np.zeros(8760)
-        self.PV_feedin = np.zeros(8760)
+
 
         self.ED_grid = np.zeros(8760)
 
@@ -242,8 +275,21 @@ class Model:
 
     def calc_PV_use(self, t):
         """allocates the PV to use"""
-        self.PV_use[t] = min(self.PV.TSD[t], self.ED[t])
-        self.PV_feedin[t] = max(self.PV.TSD[t] - self.ED[t], 0)
+        self.PV_use[t] = min(self.PV_prod[t], self.ED[t])
+        remain = self.PV_prod[t] - self.PV_use[t]
+
+        self.PV_to_battery[t] = self.battery.charge(remain * self.building.bgf / 1000) * 1000 / self.building.bgf
+        remain = remain - self.PV_to_battery[t]
+
+        self.PV_feedin[t] = max(remain - self.ED[t], 0)
+
+    def calc_battery_use(self,t):
+        remaining_ED = (self.ED[t] - self.PV_use[t]) * self.building.bgf / 1000 #kW not W/m²
+        # conditions
+        c1 = (remaining_ED > 0)
+        c2 = (self.battery.current_charge > 0)
+        if all([c1, c2]):
+            self.Btt_to_ED[t] = self.battery.discharge(remaining_ED)
 
     def calc_TI(self, t):
         QH_effective = self.ED_QH[t] * self.config.HP_COP * self.config.heating_eff
@@ -255,7 +301,7 @@ class Model:
     def calc_cost(self, years=20):
         """calculates the total cost of the system"""
         # calc investment
-        self.investment_cost = self.building.differential_cost * self.building.bgf + self.PV.cost
+        self.investment_cost = self.building.differential_cost * self.building.bgf + self.PV.cost + self.battery.cost
         self.operational_cost = self.building.bgf * (
                                 - self.PV_feedin.sum()/1000 * self.config.price_feedin \
                                 + self.ED_grid.sum()/1000 * self.config.price_grid)
@@ -289,20 +335,23 @@ class Model:
             self.calc_ED(t)
             #allocate pv
             self.calc_PV_use(t)
-            # use directly
-            # power battery
-            # feed_in
-            self.ED_grid[t] = self.ED[t] - self.PV_use[t]
+                # use directly
+                # power battery
+                # feed_in
+            # discharge battery
+            self.calc_battery_use(t)
+            self.ED_grid[t] = self.ED[t] - self.PV_use[t] - self.Btt_to_ED[t]
 
         self.calc_cost()
         return True
 
     def plot(self, show=True, start=1, end=400):
-        fig, ax = plt.subplots(4,1,figsize=(8,12)) #tight_layout=True)
+        fig, ax = plt.subplots(2,2)#,figsize=(8,12)) #tight_layout=True)
+        ax = ax.flatten()
         self.plot_Q(fig, ax[0], start=start, end=end)
         self.plot_T(fig, ax[1], start=start, end=end)
         self.plot_ED(fig, ax[2], start=start, end=end)
-        self.plot_ES(fig, ax[3], start=start, end=end)
+        self.plot_ES(fig, ax=ax[3], start=start, end=end)
 
         if show:
             dummy = plt.figure() # create a dummy figure
@@ -335,7 +384,7 @@ class Model:
 
     def plot_ED(self, fig, ax, start=1, end=8760):
         # FigureCanvas(fig) # not needed in mpl >= 3.1
-        ax.plot(self.PV.TSD[start:end])
+        ax.plot(self.PV_prod[start:end])
         ax.plot(self.ED_QH[start:end])
         ax.plot(self.ED_QC[start:end])
         ax.plot(self.ED_user[start:end])
@@ -343,21 +392,31 @@ class Model:
         ax.set_ylabel("W/m²")
         ax.legend(["PV", "WP Heizen", "WP Kühlen", "Nutzerstrom"])
 
-    def plot_ES(self, fig, ax, start=1, end=8760):
+    def plot_ES(self, fig=None, ax=None, start=1, end=8760):
         """plots the electricity supply and use"""
-        ax.plot(self.PV.TSD[start:end])
-        ax.stackplot(range(start,end),
+        show_self=False
+        if not ax:
+            fig, ax = plt.subplots(1,1)
+            show_self = True
+        ax.stackplot(range(start, end),
                      self.PV_use[start:end],
+                     self.Btt_to_ED[start:end],
                      self.ED_grid[start:end],
-                     self.PV_feedin[start:end],
-                     labels=['PV Eigenverbrauch','Netzstrom','Einspeisung'])
+                     self.PV_to_battery[start:end],
+                     self.PV_feedin[start:end],)
         ax.set_title("PV Nutzung")
         ax.set_ylabel("W/m²")
-        ax.legend(["PV", 'PV Eigenverbrauch','Netzstrom','Einspeisung'])
+        ax.legend(['PV Eigenverbrauch',
+                   'Batterie-Entladung',
+                   'Netzstrom',
+                   'Batterie-Beladung',
+                   'Einspeisung'])
+        if show_self:
+            fig.show()
+
+
 
 if __name__ == "__main__":
-    m = Model(kWp=15)
-    t = m.PV
-    b = m.building
+    m = Model(kWp=25, battery_kWh=5)
     m.simulate()
-    m.plot()
+    m.plot(start=4400,end=4600)
