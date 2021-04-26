@@ -11,26 +11,7 @@ test_Battery = {
     "discharging_power": 10. #kW
 }
 
-class PV:
-    """
-    PV Profile with .TSD in [kWh]
-    """
-    def __init__(self, csv="data/pv_1kWp.csv", kWp=1, cost_kWp=1000):
-        default_path = "data/pv_1kWp.csv"
-
-        if csv == default_path:
-            print(f"No csv-path given, loading from default {default_path}...")
-            self.TSD = np.genfromtxt(csv)
-        else:
-            self.TSD = np.genfromtxt(csv) # no specifiers, better make sure that this is right
-
-        self.set_kWp(kWp, cost_kWp)
-        self.kWh = self.TSD.sum()
-
-    def set_kWp(self, kWp, cost_kWp):
-        self.TSD = self.TSD * kWp
-        self.kWp = kWp
-        self.cost = kWp * cost_kWp
+from PV import pv
 
 class Building:
     """
@@ -142,7 +123,7 @@ class Model:
         self.building = Building()
         self.config = Config()
 
-        self.PV = PV(kWp=kWp)
+        self.PV = pv(kWp=kWp)
         self.PV_prod = self.PV.TSD *1000 / self.building.bgf  # everything is in Wh/m²
         self.PV_use = np.zeros(8760)
         self.PV_feedin = np.zeros(8760)
