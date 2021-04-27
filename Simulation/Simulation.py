@@ -7,47 +7,57 @@ from Building import Building
 from PV import PV
 from Battery import Battery
 
-class Config:
-    """stuff that won't change for most simulations"""
+class HVAC:
+    """HVAC parameters"""
     heating_system = True
-    heating_eff = 0.95 # Wirkungsgrad Verteilverluste
-    heating_months = [1,2,3,4,9,10,11,12]
+    heating_months = [1,2,3,4,9,10,11,12] # specify which months should the heating be useed
     minimum_room_temperature = 20.
 
-    HP_COP = 5 #
-    HP_heating_power = 20 #W/m²
+    HP_COP = 5 # use this static cop to calc ED = QH / cop
+    HP_heating_power = 20 #W/m² however, electric heating power cannot exceed this
+    heating_eff = 0.95  # Wirkungsgrad Verteilverluste:
+                        # fraction of HP heat generation reaching the room
+                        # to supply heat demand
 
     cooling_system = True
     cooling_months = [4,5,6,7,8,9]
     maximum_room_temperature = 26.
 
-    DHW_COP = 3
-
-    cp_air = 0.34 # spez. Wärme kapazität Luft (Wh/m3K)
-
-    price_grid = 0.19
-    price_feedin = 0.05
+    #DHW_COP = 3
 
 
 class Model:
-    def __init__(self, kWp=1, battery_kWh=15):
+    def __init__(self, kWp=1, battery_kWh=0):
 
+        ###### Compononets #####
+        # (Other classes and parts, that form the model)
         self.building = Building()
-        self.config = Config()
+        self.HVAC = HVAC()
 
         self.PV = PV()
         self.PV.set_kWp(kWp)
-        self.PV_prod = self.PV.TSD *1000 / self.building.bgf  # everything is in Wh/m²
-        self.PV_use = np.zeros(8760)
-        self.PV_feedin = np.zeros(8760)
-        self.PV_to_battery = np.zeros(8760)
-
 
         self.battery = Battery(kWh=battery_kWh)
-        self.Btt_to_ED = np.zeros(8760)
 
+        ###### Parameters #####
+        self.cp_air = 0.34  # spez. Wärme kapazität Luft (Wh/m3K)
+
+        self.price_grid = 0.19
+        self.price_feedin = 0.05
+
+        ###### Timeseries #####
         # load Usage characteristics
         self.Usage = pd.read_csv("data/usage_profiles.csv", encoding="cp1252")
+
+        # load climate data
+        self.TA = np.genfromtxt("data/climate.csv",
+                                delimiter=";")[1:, 1]
+        # load solar gains
+        self.QS = np.genfromtxt("data/Solar_gains.csv") # W/m²
+
+    def init_sim(self):
+        # (re)load profiles from self.Usage
+        #this is neccessary  if the PV model has changed inbetween simulations
         self.QI_winter = self.Usage["Qi Winter W/m²"].to_numpy()
         self.QI_summer = self.Usage["Qi Sommer W/m²"].to_numpy()
         self.QI = self.QI_winter
@@ -56,44 +66,43 @@ class Model:
         self.Qdhw = self.Usage["Warmwasserbedarf_W_m2"].to_numpy()
         self.ED_user = self.Usage["Nutzerstrom_W_m2"].to_numpy()
 
-        # load climate data
-        self.TA = np.genfromtxt("data/climate.csv",
-                                delimiter=";")[1:, 1]
-        # load solar gains
-        self.QS = np.genfromtxt("data/Solar_gains.csv") # W/m²
+        # (re)load PV profiles
+        #this is neccessary  if the PV model has changed inbetween simulations
+        self.PV_prod = self.PV.TSD *1000 / self.building.bgf  # everything is in Wh/m²
+        self.PV_use = np.zeros(8760)
+        self.PV_feedin = np.zeros(8760)
+        self.PV_to_battery = np.zeros(8760)
 
         # initialize result arrays
         self.timestamp = pd.Series(np.arange('2020-01-01 00:00', '2021-01-01 00:00', dtype='datetime64[h]'))
 
         self.QV = np.zeros(8760) # ventilation losses
-        # it's usually better to initialize our results with Not A Number,
-        # as it will immediatly cry if something isnt working.
-        # Zeros can silence errors and we never want that
-
         self.QT = np.zeros(8760) # transmission losses
+        self.Q_loss = np.zeros(8760) # total losses without heating/cooling
+
         self.TI = np.zeros(8760) # indoor temperature
 
         self.QH = np.zeros(8760) # Heating demand Wh/m²
         self.QC =  np.zeros(8760) # Cooling demand Wh/m²
-        self.Q_loss = np.zeros(8760)
 
+            # Energy demands
         self.ED_QH = np.zeros(8760)# Electricity demand for heating Wh/m²
         self.ED_QC = np.zeros(8760)  # Electricity demand for cooling Wh/m²
-
         #self.ED_Qdhw = 0
-
         self.ED = np.zeros(8760) # Electricity demand Wh/m²
-
         self.ED_grid = np.zeros(8760)
 
-    def init_sim(self):
-        self.TI[0] = self.config.minimum_room_temperature
+
+        self.Btt_to_ED = np.zeros(8760)
+
+        ## initialize starting conditions
+        self.TI[0] = self.HVAC.minimum_room_temperature
 
     def calc_QV(self, t):
         """Ventilation heat losses [W/m²BGF] at timestep t"""
         dT = self.TA[t - 1] - self.TI[t - 1]
         room_height = self.building.net_storey_height
-        cp_air = self.config.cp_air
+        cp_air = self.cp_air
         # thermally effective air change
         eff_airchange = self.ACH_I[t] + self.ACH_V[t]  # * M.VentilationSystem.share_cs * rel_ACH_after_heat_recovery
 
@@ -105,9 +114,9 @@ class Model:
         self.QT[t] = self.building.LT * dT
 
     def is_heating_on(self, t, TI_new):
-        if self.config.heating_system == True:
-            if self.timestamp[t].month in self.config.heating_months:
-                if TI_new < self.config.minimum_room_temperature:
+        if self.HVAC.heating_system == True:
+            if self.timestamp[t].month in self.HVAC.heating_months:
+                if TI_new < self.HVAC.minimum_room_temperature:
                     return True
         return False
 
@@ -129,13 +138,13 @@ class Model:
         TI = self.TI[t]
         if self.is_heating_on(t, TI):
             required_QH = self.minimum_Q(TI=TI,
-                                         set_min=self.config.minimum_room_temperature,
-                                         set_max=self.config.maximum_room_temperature,
+                                         set_min=self.HVAC.minimum_room_temperature,
+                                         set_max=self.HVAC.maximum_room_temperature,
                                          cp=self.building.heat_capacity)
-            required_ED = required_QH / self.config.HP_COP / self.config.heating_eff
-            available_power = self.config.HP_heating_power
+            required_ED = required_QH / self.HVAC.HP_COP / self.HVAC.heating_eff
+            available_power = self.HVAC.HP_heating_power
             self.ED_QH[t] = min(required_ED, available_power)
-            self.QH[t] = self.ED_QH[t] * self.config.HP_COP * self.config.heating_eff
+            self.QH[t] = self.ED_QH[t] * self.HVAC.HP_COP * self.HVAC.heating_eff
             self.TI[t] = self.TI_after_Q(TI, self.QH[t], self.building.heat_capacity)
 
     def handle_cooling(self, t):
@@ -143,22 +152,22 @@ class Model:
         TI = self.TI[t]
         if self.is_cooling_on(t, TI):
             required_QC = self.minimum_Q(TI=TI,
-                                         set_min=self.config.minimum_room_temperature,
-                                         set_max=self.config.maximum_room_temperature,
+                                         set_min=self.HVAC.minimum_room_temperature,
+                                         set_max=self.HVAC.maximum_room_temperature,
                                          cp=self.building.heat_capacity)
-            required_ED = - required_QC / self.config.HP_COP / self.config.heating_eff
-            available_power = self.config.HP_heating_power
+            required_ED = - required_QC / self.HVAC.HP_COP / self.HVAC.heating_eff
+            available_power = self.HVAC.HP_heating_power
             self.ED_QC[t] = min(required_ED, available_power)
-            self.QC[t] =  - self.ED_QC[t] * self.config.HP_COP * self.config.heating_eff
+            self.QC[t] = - self.ED_QC[t] * self.HVAC.HP_COP * self.HVAC.heating_eff
             self.TI[t] = self.TI_after_Q(TI, self.QC[t], self.building.heat_capacity)
 
     def is_cooling_on(self, t, TI_new):
         """
         Determines, whether all conditions are met to use cooling
         """
-        c1 = self.config.cooling_system == True
-        c2 = self.timestamp[t].month in self.config.cooling_months
-        c3 = TI_new > self.config.maximum_room_temperature
+        c1 = self.HVAC.cooling_system == True
+        c2 = self.timestamp[t].month in self.HVAC.cooling_months
+        c3 = TI_new > self.HVAC.maximum_room_temperature
         return all([c1, c2,
                     c3])  # returns True if all conditions are true, False otherwise. similarly, any(). You can stack this way more cleanly
 
@@ -175,7 +184,12 @@ class Model:
 
         self.PV_feedin[t] = max(remain - self.ED[t], 0)
 
+    def handle_grid(self, t):
+        self.ED_grid[t] = self.ED[t] - self.PV_use[t] - self.Btt_to_ED[t]
+
     def handle_battery(self, t):
+        self.battery.current_charge = (1-self.battery.discharge_per_hour) \
+                                      * self.battery.current_charge
         remaining_ED = (self.ED[t] - self.PV_use[t]) * self.building.bgf / 1000 #kW not W/m²
         # conditions
         c1 = (remaining_ED > 0)
@@ -192,8 +206,8 @@ class Model:
         # calc investment
         self.investment_cost = self.building.differential_cost * self.building.bgf + self.PV.cost + self.battery.cost
         self.operational_cost = self.building.bgf * (
-                                - self.PV_feedin.sum()/1000 * self.config.price_feedin \
-                                + self.ED_grid.sum()/1000 * self.config.price_grid)
+                                - self.PV_feedin.sum()/1000 * self.price_feedin \
+                                + self.ED_grid.sum()/1000 * self.price_grid)
 
         #print(f"Investment cost:  {round(self.investment_cost):>20.2f} €")
         #print(f"Operational cost: {round(self.operational_cost):>20.2f} €/annum")
@@ -229,7 +243,9 @@ class Model:
 
             # discharge battery
             self.handle_battery(t)
-            self.ED_grid[t] = self.ED[t] - self.PV_use[t] - self.Btt_to_ED[t]
+
+            # handle grid
+            self.handle_grid(t)
 
         self.calc_cost()
         return True
@@ -315,6 +331,6 @@ class Model:
 
 
 if __name__ == "__main__":
-    m = Model(kWp=25, battery_kWh=5)
+    m = Model(kWp=25, battery_kWh=30)
     m.simulate()
-    m.plot(start=0,end=8760)
+    m.plot(start=3000,end=3200)
