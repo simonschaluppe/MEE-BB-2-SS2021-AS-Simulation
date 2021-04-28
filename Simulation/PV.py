@@ -13,7 +13,7 @@ class PV:
     PV Profile with .TSD in [kWh per hour]
     """
 
-    def __init__(self, csv="data/pv_1kWp.csv", kWp=1, cost_kWp=1000):
+    def __init__(self, csv="data/pv_1kWp.csv", kWp=1, cost_kWp=1500):
         default_path = "data/pv_1kWp.csv"
 
         if csv == default_path:
@@ -24,7 +24,7 @@ class PV:
             self.TSD = np.genfromtxt(csv)  # no specifiers, better make sure that this is right
         self.path = csv
         self.kWp = kWp
-        self.cost_kWp = cost_kWp
+        self.cost_kWp = cost_kWp # cost per kWh
         self.cost = kWp * self.cost_kWp
 
     def set_kWp(self, kWp):

@@ -27,11 +27,20 @@ class HVAC:
 
 
 class Model:
-    def __init__(self, kWp=1, battery_kWh=0):
+    simulated = [] # this is not strictly neccessary
+    # it uses a class variable to save
+    # all simulated instances of a model
+    # they get recorded at the end of the
+    # Model.simulate() method
+
+    def __init__(self,
+                 building_path="data/building.xlsx",
+                 kWp=0,
+                 battery_kWh=0):
 
         ###### Compononets #####
         # (Other classes and parts, that form the model)
-        self.building = Building()
+        self.building = Building(path=building_path)
         self.HVAC = HVAC()
 
         self.PV = PV()
@@ -192,12 +201,12 @@ class Model:
         self.ED_grid[t] = self.ED[t] - self.PV_use[t] - self.Btt_to_ED[t]
 
     def handle_battery(self, t):
-        self.battery.current_charge = (1-self.battery.discharge_per_hour) \
-                                      * self.battery.current_charge
+        self.battery.SoC = (1 - self.battery.discharge_per_hour) \
+                           * self.battery.SoC
         remaining_ED = (self.ED[t] - self.PV_use[t]) * self.building.bgf / 1000 #kW not W/m²
         # conditions
         c1 = (remaining_ED > 0)
-        c2 = (self.battery.current_charge > 0)
+        c2 = (self.battery.SoC > 0)
         if all([c1, c2]):
             self.Btt_to_ED[t] = self.battery.discharge(remaining_ED)
 
@@ -251,6 +260,8 @@ class Model:
             self.handle_grid(t)
 
         self.calc_cost(verbose=False)
+
+        Model.simulated.append(self)
         return True
 
 
