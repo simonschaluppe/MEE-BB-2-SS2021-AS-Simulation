@@ -113,12 +113,30 @@ class Model:
         dT = self.TA[t - 1] - self.TI[t - 1]
         self.QT[t] = self.building.LT * dT
 
+    def handle_losses(self, t):
+        self.Q_loss[t] = (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
+        self.TI[t] = self.TI_after_Q(self.TI[t - 1], self.Q_loss[t], self.building.heat_capacity)
+
+    def TI_after_Q(self, TI_before, Q, cp):
+        """cp = spec. building heat_capacity"""
+        return TI_before + Q / cp
+
     def is_heating_on(self, t, TI_new):
         if self.HVAC.heating_system == True:
             if self.timestamp[t].month in self.HVAC.heating_months:
                 if TI_new < self.HVAC.minimum_room_temperature:
                     return True
         return False
+
+    def is_cooling_on(self, t, TI_new):
+        """
+        Determines, whether all conditions are met to use cooling
+        """
+        c1 = self.HVAC.cooling_system == True
+        c2 = self.timestamp[t].month in self.HVAC.cooling_months
+        c3 = TI_new > self.HVAC.maximum_room_temperature
+        return all([c1, c2,
+                    c3])  # returns True if all conditions are true, False otherwise. similarly, any(). You can stack this way more cleanly
 
     def minimum_Q(self, TI, set_min, set_max, cp):
         """calculates the minimum Q (positive or negative) to reach the setpoint targets"""
@@ -128,10 +146,6 @@ class Model:
             return (set_max - TI) * cp
         else:
             return 0.
-
-    def handle_losses(self, t):
-        self.Q_loss[t] = (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
-        self.TI[t] = self.TI_after_Q(self.TI[t - 1], self.Q_loss[t], self.building.heat_capacity)
 
     def handle_heating(self, t):
         """Handles the use of a heating system, applies changes to self.QH, self.ED_QH, self.TI if neccessary"""
@@ -161,16 +175,6 @@ class Model:
             self.QC[t] = - self.ED_QC[t] * self.HVAC.HP_COP * self.HVAC.heating_eff
             self.TI[t] = self.TI_after_Q(TI, self.QC[t], self.building.heat_capacity)
 
-    def is_cooling_on(self, t, TI_new):
-        """
-        Determines, whether all conditions are met to use cooling
-        """
-        c1 = self.HVAC.cooling_system == True
-        c2 = self.timestamp[t].month in self.HVAC.cooling_months
-        c3 = TI_new > self.HVAC.maximum_room_temperature
-        return all([c1, c2,
-                    c3])  # returns True if all conditions are true, False otherwise. similarly, any(). You can stack this way more cleanly
-
     def calc_ED(self, t):
         self.ED[t] = self.ED_QH[t] + self.ED_QC[t] + self.ED_user[t]
 
@@ -197,11 +201,7 @@ class Model:
         if all([c1, c2]):
             self.Btt_to_ED[t] = self.battery.discharge(remaining_ED)
 
-    def TI_after_Q(self, TI_before, Q, cp):
-        """cp = spec. building heat_capacity"""
-        return TI_before + Q / cp
-
-    def calc_cost(self, years=20):
+    def calc_cost(self, years=20, verbose=True):
         """calculates the total cost of the system"""
         # calc investment
         self.investment_cost = self.building.differential_cost * self.building.bgf + self.PV.cost + self.battery.cost
@@ -209,13 +209,16 @@ class Model:
                                 - self.PV_feedin.sum()/1000 * self.price_feedin \
                                 + self.ED_grid.sum()/1000 * self.price_grid)
 
-        #print(f"Investment cost:  {round(self.investment_cost):>20.2f} €")
-        #print(f"Operational cost: {round(self.operational_cost):>20.2f} €/annum")
 
         self.total_cost = self.investment_cost + self.operational_cost * years
-        #print(f"Total cost after {years} years: {round(self.total_cost):>11,.2f} €")
+
+        if verbose:
+            print(f"Investment cost:  {round(self.investment_cost):>20.2f} €")
+            print(f"Operational cost: {round(self.operational_cost):>20.2f} €/annum")
+            print(f"Total cost after {years} years: {round(self.total_cost):>11,.2f} €")
 
         return self.total_cost
+
 
     def simulate(self):
 
@@ -247,8 +250,9 @@ class Model:
             # handle grid
             self.handle_grid(t)
 
-        self.calc_cost()
+        self.calc_cost(verbose=False)
         return True
+
 
     def plot(self, show=True, start=1, end=400, month=None):
         fig, ax = plt.subplots(2,2)#,figsize=(8,12)) #tight_layout=True)
