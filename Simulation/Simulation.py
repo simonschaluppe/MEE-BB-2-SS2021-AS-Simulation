@@ -35,15 +35,15 @@ class Model:
 
     def __init__(self,
                  building_path="data/building.xlsx",
-                 kWp=0,
-                 battery_kWh=0):
+                 kWp=1, # PV kWp
+                 battery_kWh=1): # Battery kWh
 
         ###### Compononets #####
         # (Other classes and parts, that form the model)
         self.building = Building(path=building_path)
         self.HVAC = HVAC()
 
-        self.PV = PV()
+        self.PV = PV(csv="data/pv_1kWp.csv", kWp=1)
         self.PV.set_kWp(kWp)
 
         self.battery = Battery(kWh=battery_kWh)
@@ -51,8 +51,8 @@ class Model:
         ###### Parameters #####
         self.cp_air = 0.34  # spez. Wärme kapazität Luft (Wh/m3K)
 
-        self.price_grid = 0.19
-        self.price_feedin = 0.05
+        self.price_grid = 0.19      # €/kWh
+        self.price_feedin = 0.05    # €/kWh
 
         ###### Timeseries #####
         # load Usage characteristics
@@ -348,4 +348,4 @@ class Model:
 if __name__ == "__main__":
     m = Model(kWp=25, battery_kWh=30)
     m.simulate()
-    m.plot(start=3000,end=3200)
+    m.plot(start=3000, end=3200)

@@ -13,22 +13,18 @@ class PV:
     PV Profile with .TSD in [kWh per hour]
     """
 
-    def __init__(self, csv="data/pv_1kWp.csv", kWp=1, cost_kWp=1500):
-        default_path = "data/pv_1kWp.csv"
+    def __init__(self, csv, kWp, cost_kWp=1500):
 
-        if csv == default_path:
-            print(f"No csv-path given, loading from default {default_path}...")
-            self.TSD = np.genfromtxt(csv)
-
-        else:
-            self.TSD = np.genfromtxt(csv)  # no specifiers, better make sure that this is right
+        self.TSD_source = np.genfromtxt(csv)
         self.path = csv
-        self.kWp = kWp
+        self.source_kWp = kWp
         self.cost_kWp = cost_kWp # cost per kWh
-        self.cost = kWp * self.cost_kWp
+
+        self.set_kWp(kWp)
 
     def set_kWp(self, kWp):
-        self.TSD = self.TSD / self.kWp * kWp
+
+        self.TSD = self.TSD_source / self.source_kWp * kWp
         self.kWp = kWp
         self.cost = kWp * self.cost_kWp
 
@@ -42,7 +38,8 @@ cost [€]: {self.cost:>{width-10}d}"""
 
 
 if __name__ == "__main__":
-    test = PV()
+    test = PV(csv="data/pv_1kWp.csv",
+              kWp=1)
     import matplotlib.pyplot as plt
     plt.plot(test.TSD)
     plt.show()
