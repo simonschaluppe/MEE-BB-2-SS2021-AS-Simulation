@@ -1,15 +1,18 @@
 # imports
+from Building import Building
 
 # your code here ...
 
 class Model:
-    def __init__(self,building_path="data/building.xlsx",
-                 kWp=0,
-                 battery_kWh=0):
+    def __init__(self,
+                 building_path="data/building.xlsx", # building parameters
+                 kWp=0, # PV parameters
+                 battery_kWh=0): # battery parameters
         print("initializing Model")
         ###### Compononets #####
         # (Other classes and parts, that form the model)
         # your code here...
+        self.building = Building(path=building_path)
 
         ###### Parameters #####
         # your code here...
@@ -48,11 +51,21 @@ class Model:
         # your code here...
         for t in range(1, 8760):
             print("simulating timestep ",t)
-            # your code here...
+                    for t in range(1, 8760):
+            #### Verluste
+            self.calc_QV(t)
+            self.calc_QT(t)
+            self.handle_losses(t)
+
+            #### Heizung
+            self.handle_heating(t)
+
+            #### Kühlung
+            self.handle_cooling(t)
         # your code here...
         return True
 
 
 if __name__ == "__main__":
     m = Model(kWp=25, battery_kWh=30)
-    m.simulate()
+    #m.simulate()

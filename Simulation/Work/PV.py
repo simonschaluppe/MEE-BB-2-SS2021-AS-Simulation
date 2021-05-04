@@ -5,6 +5,9 @@ Created on Mon Apr 26 13:10:17 2021
 @author: Simon
 """
 
+class Storage:
+    pass
+
 
 class PV:
     """
