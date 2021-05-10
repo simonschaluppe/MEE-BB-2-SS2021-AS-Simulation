@@ -25,6 +25,13 @@ class HVAC:
 
     #DHW_COP = 3
 
+    class HVAC:
+        """HVAC parameters"""
+        def __init__(self):
+            self.heating_system = True
+            self.heating_months = [1, 2, 3, 4, 9, 10, 11, 12]  # specify which months should the heating be useed
+            self.minimum_room_temperature = 20.
+
 
 class Model:
     simulated = [] # this is not strictly neccessary
@@ -34,7 +41,7 @@ class Model:
     # Model.simulate() method
 
     def __init__(self,
-                 building_path="data/building.xlsx",
+                 building_path="data/building_oib_16linie.xlsx",
                  kWp=1, # PV kWp
                  battery_kWh=1): # Battery kWh
 
@@ -69,7 +76,7 @@ class Model:
         #this is neccessary  if the PV model has changed inbetween simulations
         self.QI_winter = self.Usage["Qi Winter W/m²"].to_numpy()
         self.QI_summer = self.Usage["Qi Sommer W/m²"].to_numpy()
-        self.QI = self.QI_winter
+
         self.ACH_V = self.Usage["Luftwechsel_Anlage_1_h"].to_numpy()
         self.ACH_I = self.Usage["Luftwechsel_Infiltration_1_h"].to_numpy()
         self.Qdhw = self.Usage["Warmwasserbedarf_W_m2"].to_numpy()
@@ -87,6 +94,7 @@ class Model:
 
         self.QV = np.zeros(8760) # ventilation losses
         self.QT = np.zeros(8760) # transmission losses
+        self.QI = np.zeros(8760) #  Internal losses
         self.Q_loss = np.zeros(8760) # total losses without heating/cooling
 
         self.TI = np.zeros(8760) # indoor temperature
@@ -121,6 +129,18 @@ class Model:
         """Transmission heat losses [W/m²BGF] at timestep t"""
         dT = self.TA[t - 1] - self.TI[t - 1]
         self.QT[t] = self.building.LT * dT
+
+    def calc_QI(self, t):
+        heat = self.timestamp[t].month in self.HVAC.heating_months
+        cool = self.timestamp[t].month in self.HVAC.cooling_months
+        if (heat and cool) or (not heat and not cool): # wenn beides oder keinss von beiden, mittelwert
+            self.QI[t] = (self.QI_winter[t] + self.QI_summer[t])/ 2
+        elif heat:
+            self.QI[t] = self.QI_winter[t]
+        elif cool:
+            self.QI[t] = self.QI_summer[t]
+        else:
+            raise NotImplementedError("Case not defined!")
 
     def handle_losses(self, t):
         self.Q_loss[t] = (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
@@ -239,6 +259,7 @@ class Model:
             #### Verluste
             self.calc_QV(t)
             self.calc_QT(t)
+            self.calc_QI(t)
             self.handle_losses(t)
 
             #### Heizung
@@ -265,7 +286,7 @@ class Model:
         return True
 
 
-    def plot(self, show=True, start=1, end=400, month=None):
+    def plot(self, show=True, start=1, end=8760, month=None):
         fig, ax = plt.subplots(2,2)#,figsize=(8,12)) #tight_layout=True)
         ax = ax.flatten()
         self.plot_heat_balance(fig, ax[0], start=start, end=end)
@@ -344,8 +365,27 @@ class Model:
     def plot_demand(self):
         pass
 
+    def __repr__(self):
+            width = len(self.building.file)
+            return f"""
+Gebäude    {self.building.file}
+PV-Anlage  {self.PV.kWp} kWp
+Batterie   {self.battery.capacity} kWh
+{"-" * (width + 20)}
+Heizwärmebedarf (QH):       {self.QH.sum()/1000:>{width - 19}.1f} kWh/m²BGFa
+Kühlbedarf (QH):            {-self.QC.sum()/1000:>{width - 19}.1f} kWh/m²BGFa
+Strombedarf (ED):           {self.ED.sum()/1000:>{width - 19}.1f} kWh/m²BGFa
+PV Eigenverbrauch (PV_use): {self.PV_use.sum()/1000:>{width - 19}.1f} kWh/m²BGFa
+Netzstrom (ED_grid):        {self.ED_grid.sum()/1000:>{width - 19}.1f} kWh/m²BGFa
+{"-" * (width + 20)}
+Investkosten:               {self.investment_cost:>{width - 10}.0f} €
+Betriebskosten pro Jahr:        ({self.operational_cost:>{width - 15}.0f} €/a)
+Betriebskosten (20 Jahre):  {self.operational_cost*20:>{width - 10}.0f} €
+Gesamtkosten:               {self.total_cost:>{width - 10}.0f} €"""
+
 
 if __name__ == "__main__":
-    m = Model(kWp=25, battery_kWh=30)
+    m = Model(kWp=50, battery_kWh=30)
     m.simulate()
-    m.plot(start=3000, end=3200)
+    m.plot()
+    print(m)
