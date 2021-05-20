@@ -316,42 +316,34 @@ class Model:
         ax.set_ylabel("W/m²")
         plt.show()
 
-    def plot_temperatures(self, fig=None, ax=None, start=1, end=8760):
+    def plot_temperatures(self, fig=None, ax=None, start=1, end=8760, **kwargs):
         if (fig, ax) == (None, None):
             fig, ax = plt.subplots(1,1)
         self.plot_arrays(ax=ax, start=start, end=end,
-                         arrays=[self.TI, self.TA])
-
+                         arrays=[self.TI, self.TA], **kwargs)
         ax.legend(["Innenraum", "Außenluft"])
         ax.set_title("Temperatur")
         ax.set_ylabel("Temperatur [°C]")
         plt.show()
 
-
-
-    def plot_electricity_demand(self, fig=None, ax=None, start=1, end=8760):
+    def plot_electricity_demand(self, fig=None, ax=None, start=1, end=8760, **kwargs):
         # FigureCanvas(fig) # not needed in mpl >= 3.1
         if (fig, ax) == (None, None):
             fig, ax = plt.subplots(1,1)
-        ax.plot(self.PV_prod[start:end])
-        ax.plot(self.ED_QH[start:end])
-        ax.plot(self.ED_QC[start:end])
-        ax.plot(self.ED_user[start:end])
+        self.plot_arrays(ax=ax, start=start, end=end,
+                         arrays=[self.PV_prod, self.ED_QH, self.ED_QC, self.ED_user], **kwargs)
         ax.set_title("Strom")
         ax.set_ylabel("W/m²")
         ax.legend(["PV", "WP Heizen", "WP Kühlen", "Nutzerstrom"])
         plt.show()
 
-    def plot_electricity_use(self, fig=None, ax=None, start=1, end=8760):
+    def plot_electricity_use(self, fig=None, ax=None, start=1, end=8760, **kwargs):
         """plots the electricity supply and use"""
         if (fig, ax) == (None, None):
             fig, ax = plt.subplots(1, 1)
-        ax.stackplot(range(start, end),
-                     self.PV_use[start:end],
-                     self.Btt_to_ED[start:end],
-                     self.ED_grid[start:end],
-                     self.PV_to_battery[start:end],
-                     self.PV_feedin[start:end],)
+        self.plot_arrays(ax=ax, start=start, end=end,
+                         arrays=[self.PV_use, self.Btt_to_ED, self.ED_grid, self.PV_to_battery,
+                                 self.PV_feedin], **kwargs)
         ax.set_title("PV Nutzung")
         ax.set_ylabel("W/m²")
         ax.legend(['PV Eigenverbrauch',
@@ -364,7 +356,6 @@ class Model:
     def plot_arrays(self, ax, start, end, arrays:list, **kwargs):
         for array in arrays:
             ax.plot(array[start:end], **kwargs)
-
 
     def __repr__(self):
             width = len(self.building.file)
