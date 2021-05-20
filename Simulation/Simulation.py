@@ -23,15 +23,7 @@ class HVAC:
     cooling_months = [4,5,6,7,8,9]
     maximum_room_temperature = 26.
 
-    #DHW_COP = 3
-
-    class HVAC:
-        """HVAC parameters"""
-        def __init__(self):
-            self.heating_system = True
-            self.heating_months = [1, 2, 3, 4, 9, 10, 11, 12]  # specify which months should the heating be useed
-            self.minimum_room_temperature = 20.
-
+    # use COP,power and efficiency from heating also for cooling
 
 class Model:
     simulated = [] # this is not strictly neccessary
@@ -143,7 +135,9 @@ class Model:
             raise NotImplementedError("Case not defined!")
 
     def handle_losses(self, t):
+        # determine losses
         self.Q_loss[t] = (self.QT[t] + self.QV[t]) + self.QS[t] + self.QI[t]
+        # determine indoor temperature after losses
         self.TI[t] = self.TI_after_Q(self.TI[t - 1], self.Q_loss[t], self.building.heat_capacity)
 
     def TI_after_Q(self, TI_before, Q, cp):
@@ -208,23 +202,30 @@ class Model:
         self.ED[t] = self.ED_QH[t] + self.ED_QC[t] + self.ED_user[t]
 
     def handle_PV(self, t):
-        """allocates the PV to use"""
+        """allocates the PV to direct and  battery charge use"""
+        #calculate the direct Use of PV
         self.PV_use[t] = min(self.PV_prod[t], self.ED[t])
         remain = self.PV_prod[t] - self.PV_use[t]
 
+        #calculate the remaining PV to Battery
         self.PV_to_battery[t] = self.battery.charge(remain * self.building.bgf / 1000) * 1000 / self.building.bgf
         remain = remain - self.PV_to_battery[t]
-
+        #calculate the remaining PV to Battery
         self.PV_feedin[t] = max(remain - self.ED[t], 0)
 
     def handle_grid(self, t):
+        """calculate the remaining grid demand: Total Energy demand [ED] - PVuse - Battery_discharge"""
         self.ED_grid[t] = self.ED[t] - self.PV_use[t] - self.Btt_to_ED[t]
 
     def handle_battery(self, t):
+        # Lower SoC by hourly losses
         self.battery.SoC = (1 - self.battery.discharge_per_hour) \
                            * self.battery.SoC
+
+        # calculate remaining electricity demand not covered after PV use for time t
         remaining_ED = (self.ED[t] - self.PV_use[t]) * self.building.bgf / 1000 #kW not W/m²
         # conditions
+        # if remaining energy demand > 0 AND battery.SoC > 0
         c1 = (remaining_ED > 0)
         c2 = (self.battery.SoC > 0)
         if all([c1, c2]):
@@ -282,8 +283,9 @@ class Model:
 
         self.calc_cost(verbose=False)
 
-        Model.simulated.append(self)
-        return True
+        Model.simulated.append(self) # this adds the model result to the base class (optional)
+        return True  # the simulate() method does not NEEd to return something
+        # but it can be used to check if the simulation ran successfully
 
 
     def plot(self, show=True, start=1, end=8760, month=None):
@@ -301,12 +303,12 @@ class Model:
             fig.set_canvas(new_manager.canvas)
             fig.show()
 
-    def plot_heat_balance(self, fig=None, ax=None, start=1, end=8760):
+    def plot_heat_balance(self, fig=None, ax=None, start=1, end=8760, **kwargs):
         if (fig, ax) == (None, None):
             fig, ax = plt.subplots(1,1)
         self.plot_arrays(ax=ax, start=start, end=end,
                          arrays=[self.QT, self.QV, self.QS, self.QI,
-                                 self.QH, self.QC])
+                                 self.QH, self.QC], **kwargs)
         ax.legend(["Transmissionsverluste", "Lüftungsverluste",
                    "Solare Gewinne", "Innere Lasten",
                    "Heizwärmebdedarf", "Kühlbedarf"])
@@ -325,13 +327,12 @@ class Model:
         ax.set_ylabel("Temperatur [°C]")
         plt.show()
 
-    def plot_arrays(self, ax, start, end, arrays:list):
-        for array in arrays:
-            ax.plot(array[start:end])
 
 
-    def plot_electricity_demand(self, fig, ax, start=1, end=8760):
+    def plot_electricity_demand(self, fig=None, ax=None, start=1, end=8760):
         # FigureCanvas(fig) # not needed in mpl >= 3.1
+        if (fig, ax) == (None, None):
+            fig, ax = plt.subplots(1,1)
         ax.plot(self.PV_prod[start:end])
         ax.plot(self.ED_QH[start:end])
         ax.plot(self.ED_QC[start:end])
@@ -339,13 +340,12 @@ class Model:
         ax.set_title("Strom")
         ax.set_ylabel("W/m²")
         ax.legend(["PV", "WP Heizen", "WP Kühlen", "Nutzerstrom"])
+        plt.show()
 
     def plot_electricity_use(self, fig=None, ax=None, start=1, end=8760):
         """plots the electricity supply and use"""
-        show_self=False
-        if not ax:
-            fig, ax = plt.subplots(1,1)
-            show_self = True
+        if (fig, ax) == (None, None):
+            fig, ax = plt.subplots(1, 1)
         ax.stackplot(range(start, end),
                      self.PV_use[start:end],
                      self.Btt_to_ED[start:end],
@@ -359,11 +359,12 @@ class Model:
                    'Netzstrom',
                    'Batterie-Beladung',
                    'Einspeisung'])
-        if show_self:
-            fig.show()
+        plt.show()
 
-    def plot_demand(self):
-        pass
+    def plot_arrays(self, ax, start, end, arrays:list, **kwargs):
+        for array in arrays:
+            ax.plot(array[start:end], **kwargs)
+
 
     def __repr__(self):
             width = len(self.building.file)
@@ -388,4 +389,4 @@ if __name__ == "__main__":
     m = Model(kWp=50, battery_kWh=30)
     m.simulate()
     m.plot()
-    print(m)
+    print(m) # calls the __repr__() method to print a nice representation of the object
