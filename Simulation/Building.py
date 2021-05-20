@@ -65,14 +65,16 @@ class Building:
         width = len(self.file) + 10
         string = f"""Building {self.file}
 {"-" * width}
-bgf: {self.gf}
-gf: {self.heat_capacity}
-heat_capacity: {self.net_storey_height}
-net_storey_height: {self.differential_cost}
-LT: {self.LT}
+BGF:              {self.bgf:>6} m²             
+GF:               {self.gf:>6} m²
+heat_capacity:    {self.heat_capacity:>6} Wh/m²K
+net_storey_height:{self.net_storey_height:>6} m
+Differential cost:{self.differential_cost:>6} €/m²BGF
+Leitwert (LT)     {self.LT:>6.2f} W/K/m²BGF
 """
         return string
 
 
 if __name__ == "__main__":
     test = Building()
+    print(test)
